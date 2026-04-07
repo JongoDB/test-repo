@@ -1,0 +1,114 @@
+# UKB Implementation Workflow
+# Place this file at .github/workflows/ukb-implement.yml in your repository.
+# Required secrets: ANTHROPIC_API_KEY
+#
+# UKB dispatches this workflow via workflow_dispatch with issue details.
+# After Claude Code runs, cost data is uploaded as an artifact for UKB to collect.
+
+name: UKB Implementation
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "GitHub issue number"
+        required: true
+      issue_title:
+        description: "Issue title"
+        required: true
+      issue_body:
+        description: "Issue body / description"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Create feature branch
+        run: |
+          BRANCH="ukb/issue-${{ inputs.issue_number }}"
+          git checkout -b "$BRANCH"
+
+      - name: Run Claude Code
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          cat > /tmp/ukb-prompt.txt << 'PROMPT_EOF'
+          You are implementing a feature request for this repository.
+
+          ## Issue #${{ inputs.issue_number }}: ${{ inputs.issue_title }}
+
+          ${{ inputs.issue_body }}
+
+          ## Instructions
+          1. Read the existing codebase to understand the project structure.
+          2. Implement the changes described in the issue above.
+          3. Follow existing code style and conventions.
+          4. Write tests if the project has a test suite.
+          5. Ensure all existing tests still pass.
+          6. Do not modify unrelated code.
+          PROMPT_EOF
+
+          claude -p "$(cat /tmp/ukb-prompt.txt)" \
+            --allowedTools "Bash,Edit,Write,Read" \
+            --output-format json \
+            --yes \
+            > /tmp/claude-output.json 2>/tmp/claude-stderr.log || true
+
+          # Extract cost data from JSON output
+          python3 << 'PYEOF'
+          import json, os
+          cost = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+          try:
+              with open("/tmp/claude-output.json") as f:
+                  data = json.load(f)
+              usage = data.get("usage", {})
+              cost["input_tokens"] = usage.get("input_tokens", 0)
+              cost["output_tokens"] = usage.get("output_tokens", 0)
+              cost["cost_usd"] = data.get("cost_usd", 0.0) or 0.0
+          except Exception as e:
+              print(f"Warning: could not parse Claude output for cost: {e}")
+          with open("ukb-cost.json", "w") as f:
+              json.dump(cost, f)
+          print(f"Cost data: {cost}")
+          PYEOF
+
+      - name: Commit and push
+        run: |
+          BRANCH="ukb/issue-${{ inputs.issue_number }}"
+          git config user.name "UKB Bot"
+          git config user.email "ukb-bot@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "feat: ${{ inputs.issue_title }}"
+          git push origin "$BRANCH"
+
+      - name: Create pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "feat: ${{ inputs.issue_title }}" \
+            --body "Closes #${{ inputs.issue_number }}" \
+            --base "${{ github.event.repository.default_branch }}"
+
+      - name: Upload cost data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ukb-cost
+          path: ukb-cost.json
+          retention-days: 7
