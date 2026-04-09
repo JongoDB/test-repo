@@ -7,12 +7,48 @@ import sys
 from task_tracker.store import TaskStore
 
 
+def get_store_backend(args: list[str]) -> tuple[TaskStore, list[str]]:
+    """Parse backend option and return appropriate store instance and remaining args."""
+    backend = "json"  # default
+    remaining_args = []
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--backend" and i + 1 < len(args):
+            backend = args[i + 1]
+            i += 2  # skip both --backend and its value
+        else:
+            remaining_args.append(args[i])
+            i += 1
+
+    if backend == "json":
+        return TaskStore(), remaining_args
+    elif backend == "postgresql":
+        try:
+            from task_tracker.postgres_store import PostgreSQLTaskStore
+            return PostgreSQLTaskStore(), remaining_args
+        except ImportError as e:
+            print(f"PostgreSQL backend not available: {e}")
+            print("Install with: pip install .[postgresql]")
+            sys.exit(1)
+    else:
+        print(f"Unknown backend: {backend}. Supported: json, postgresql")
+        sys.exit(1)
+
+
 def main() -> None:
-    store = TaskStore()
     args = sys.argv[1:]
 
     if not args:
-        print("Usage: task-tracker <command> [args]")
+        print("Usage: task-tracker [--backend json|postgresql] <command> [args]")
+        print("Commands: add, list, done, remove, stats")
+        print("Backends: json (default), postgresql")
+        sys.exit(1)
+
+    store, args = get_store_backend(args)
+
+    if not args:
+        print("Usage: task-tracker [--backend json|postgresql] <command> [args]")
         print("Commands: add, list, done, remove, stats")
         sys.exit(1)
 
@@ -72,6 +108,10 @@ def main() -> None:
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
+
+    # Clean up database connection if using PostgreSQL
+    if hasattr(store, 'close'):
+        store.close()
 
 
 if __name__ == "__main__":

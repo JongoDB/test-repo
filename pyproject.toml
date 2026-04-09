@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 
 [project.optional-dependencies]
 dev = ["pytest"]
+postgresql = ["psycopg2-binary>=2.9.0"]
 
 [project.scripts]
 task-tracker = "task_tracker.cli:main"
